@@ -1,0 +1,1196 @@
+###Unit Weibull##
+rm(list = ls())
+
+
+
+
+#####New Stan Code####
+QULL_Model<-"functions {
+  // Custom log-PDF for your QULL distribution
+  real Q_custom_lpdf(real y, real alpha, real mu, real u) {
+    real term1;
+    real term2;
+    real term3;
+    real term4;
+    real term5;
+    real term6;
+    real term7;
+    real exponent;
+
+    // compute common exponent
+    exponent = pow(-log(y), alpha) * pow(-log(mu), -alpha);
+
+    // log(alpha / y)
+    term1 = log(alpha);
+    term2 = -log(y);
+
+    // (-log y)^(alpha - 1)
+    term3 = (alpha - 1) * log(-log(y));
+
+    // (-log mu)^(-alpha)
+    term4 = -alpha * log(-log(mu));
+
+    // log(log(1 - log u))
+    term5 = log(log(1 - log(u)));
+
+    // [(1 - log u)^( -log mu^-alpha )]^( -log y^alpha )
+    term6 = exponent * log(1 - log(u));
+
+    // exp{1 - [...] } -> log(exp{1 - [...]}) = 1 - [...]
+    term7 = 1 - pow(1 - log(u), exponent);
+
+    return term1 + term2 + term3 + term4 + term5 + term6 + term7;
+  }
+  real Q_custom_rng(real alpha, real mu, real u) {
+    real p;
+    real B;
+    real denom_log;
+    real numer_log;
+    real y;
+
+    // Sample p ~ Uniform(0,1)
+    p = uniform_rng(0, 1);
+
+    // Compute intermediate values
+    B = -log(mu);
+    denom_log = log(1 - log(u));
+    numer_log = log(1 - log(p));
+
+    // Compute the quantile
+    y = exp( - B * pow(numer_log / denom_log, 1 / alpha) );
+    return y;
+  }
+}
+
+data {
+  int<lower=0> n;                 // number of observations
+  int<lower=0> M;                 // number of groups
+  real<lower=0, upper=1> y[n];    // response
+  int<lower=1> K;                 // number of predictors
+  matrix[n, K] X;                 // design matrix
+  int<lower=1, upper=M> id[n];    // group ID
+  vector[K] b0;                    // prior mean for beta
+  matrix[K, K] B0;                 // prior covariance for beta
+  real<lower=0, upper=1> u;       // fixed u
+}
+
+parameters {
+  vector[K] beta;                 
+  vector<lower=0>[2] sigma_b;     
+  matrix[2, M] z_b;               
+  cholesky_factor_corr[2] L_b;    
+  real<lower=0> alpha;            
+}
+
+transformed parameters {
+  vector<lower=0, upper=1>[n] mu;
+  vector[n] eta_mu;
+  matrix[2, M] b;
+  b = diag_pre_multiply(sigma_b, L_b) * z_b;
+  eta_mu = X * beta;
+  for (i in 1:n)
+    mu[i] = inv_logit(eta_mu[i] + b[1, id[i]] + b[2, id[i]] * X[i, 3]);
+}
+
+model {
+  // Priors
+  L_b ~ lkj_corr_cholesky(2.0);
+  to_vector(z_b) ~ normal(0, 1);
+  beta ~ multi_normal(b0, B0);
+  sigma_b ~ normal(0,1);
+  alpha ~ exponential(0.5);
+  
+  // Likelihood
+  for (i in 1:n)
+    target += Q_custom_lpdf(y[i] | alpha, mu[i], u);
+}
+generated quantities {
+  matrix[2, 2] Rho;
+  //vector[n] log_lik;
+  //vector[n] y_sim;
+  // Compute correlation matrix
+  Rho = multiply_lower_tri_self_transpose(L_b);
+
+  // Compute log-likelihood for observed data
+  //for (i in 1:n) {
+    //log_lik[i] = Q_custom_lpdf(y[i] | alpha, mu[i], u);
+     //y_sim[i] = Q_custom_rng(alpha, mu[i], 0.5);
+  //}
+}"
+
+
+#########################################
+#################Simulation #############
+############################################
+library(MASS)     # for mvrnorm
+library(rstan)
+
+set.seed(123)
+Nsim <- 500 # number of simulation replicates
+n <- 150     # total observations
+M <- 20    # number of groups
+K <- 3       # number of fixed effects
+u <- 0.5
+
+# True parameters1
+#beta_true <- c(0.5, -1, 1.5)
+#sigma_b_true <- c(0.3, 0.5)
+#rho_true <- 0.2
+#alpha_true <-2
+
+# True parameters2
+beta_true <- c(-0.7, -1, 0.3)
+sigma_b_true <- c(0.866, 0.707) #sigma1^=0.75, andsigma2^2=0.5, sigma_12=0.5
+rho_true <- 0.82
+alpha_true <-5
+#Calculation for rho0.5/(sqrt(0.5)*sqrt(0.75))
+
+
+# Covariance for random effects
+Sigma_b_true <- matrix(c(
+  sigma_b_true[1]^2, rho_true * sigma_b_true[1] * sigma_b_true[2],
+  rho_true * sigma_b_true[1] * sigma_b_true[2], sigma_b_true[2]^2
+), nrow = 2, byrow = TRUE)
+
+# Quantile function (bounded distribution)
+Q_custom <- function(p, alpha, mu, u) {
+  if (alpha <= 0) stop("alpha must be > 0")
+  if (mu <= 0 || mu >= 1) stop("mu must be in (0,1)")
+  
+  B <- -log(mu)
+  denom_log <- log(1 - log(u))
+  numer_log <- log(1 - log(p))
+  frac <- numer_log / denom_log
+  y <- exp(-B * (frac)^(1 / alpha))
+}
+
+#
+
+# Random draw function
+r_custom <- function(n, alpha, mu, u) {
+  #p <- runif(n)
+  p <- runif(n)
+  Q_custom(p, alpha, mu, u)
+}
+
+# Simulation function
+simulate_data <- function(n, M, beta_true, Sigma_b_true, alpha_true, u) {
+  X <- cbind(1, rnorm(n), rnorm(n)) 
+  id <- rep(1:M, length.out = n)
+  b_mat <- mvrnorm(M, mu = c(0, 0), Sigma = Sigma_b_true)
+  
+  eta <- X %*% beta_true
+  mu <- numeric(n)
+  y <- numeric(n)
+  
+  for (i in 1:n) {
+    rand_eff <- b_mat[id[i], 1] + b_mat[id[i], 2] * X[i, 3]
+    mu[i] <- 1 / (1 + exp(-(eta[i] + rand_eff)))
+    y[i] <- r_custom(1, alpha_true, mu[i], u)
+  }
+  
+  list(X = X, y = y, id = id, mu = mu)
+}
+results <- data.frame()
+
+stan_model <- stan_model(model_code = QULL_Model)
+
+for (sim in 1:Nsim) {
+  cat("Simulation", sim, "of", Nsim, "\n")
+  
+  # Simulate data including zero inflation (gamma_true added)
+  data_sim <- simulate_data(n, M, beta_true, Sigma_b_true, alpha_true, u)
+  stan_data <- list(
+    n = n, M = M, y = data_sim$y, K = K, X = data_sim$X, id = data_sim$id,
+    b0 = rep(0, K), B0 = diag(100, K), u = u
+  )
+  
+  inits1 <- function() {
+    list(
+      beta    = rnorm(K, 0, 0.05),           # tighter around 0, less chance of extreme values
+      sigma_b = runif(2, 0.05, 0.2),         # small positive values, avoids exact zero
+      z_b     = matrix(rnorm(2 * M, 0, 0.05), nrow = 2, ncol = M), # small values
+      L_b     = diag(2) + matrix(rnorm(4, 0, 0.01), nrow = 2), # slightly perturbed identity
+      alpha   = runif(1, 0.5, 1.8)             # positive and away from extreme boundary
+    )
+  }
+  
+  warning_occurred <- FALSE
+  
+  fit <- tryCatch(
+    withCallingHandlers(
+      sampling(stan_model, data = stan_data, chains = 2, iter = 5000, init = inits1,
+               control = list(adapt_delta = 0.999, max_treedepth = 18), refresh=0),
+      warning = function(w) {
+        message("⚠️  Warning in sim ", sim, ": ", conditionMessage(w))
+        warning_occurred <<- TRUE
+        invokeRestart("muffleWarning")
+      }
+    ),
+    error = function(e) {
+      message("❌  Error in sim ", sim, ": ", conditionMessage(e))
+      NULL
+    }
+  )
+  
+  if (warning_occurred || is.null(fit)) {
+    cat("⏩ Skipping simulation", sim, "due to warning or error\n")
+    next
+  }
+  
+  post_sum <- summary(fit)$summary
+  # Extract beta estimates
+  est_beta1 <- post_sum["beta[1]", "mean"]
+  lci_beta1 <- post_sum["beta[1]", "2.5%"]
+  uci_beta1 <- post_sum["beta[1]", "97.5%"]
+  
+  est_beta2 <- post_sum["beta[2]", "mean"]
+  lci_beta2 <- post_sum["beta[2]", "2.5%"]
+  uci_beta2 <- post_sum["beta[2]", "97.5%"]
+  
+  est_beta3 <- post_sum["beta[3]", "mean"]
+  lci_beta3 <- post_sum["beta[3]", "2.5%"]
+  uci_beta3 <- post_sum["beta[3]", "97.5%"]
+  
+  # Extract sigma_b estimates
+  est_sigma1 <- post_sum["sigma_b[1]", "mean"]
+  lci_sigma1 <- post_sum["sigma_b[1]", "2.5%"]
+  uci_sigma1 <- post_sum["sigma_b[1]", "97.5%"]
+  
+  est_sigma2 <- post_sum["sigma_b[2]", "mean"]
+  lci_sigma2 <- post_sum["sigma_b[2]", "2.5%"]
+  uci_sigma2 <- post_sum["sigma_b[2]", "97.5%"]
+  
+  # Extract rho (correlation)
+  est_rho <- post_sum["Rho[1,2]", "mean"]
+  lci_rho <- post_sum["Rho[1,2]", "2.5%"]
+  uci_rho <- post_sum["Rho[1,2]", "97.5%"]
+  
+  # Extract theta (shape)
+  est_alpha <- post_sum["alpha", "mean"]
+  lci_alpha <- post_sum["alpha", "2.5%"]
+  uci_alpha<- post_sum["alpha", "97.5%"]
+  
+  # Append to results (make sure 'results' data frame exists before loop)
+  results <- rbind(
+    results,
+    data.frame(
+      sim = sim,
+      beta1 = est_beta1, beta1_lci = lci_beta1, beta1_uci = uci_beta1,
+      beta2 = est_beta2, beta2_lci = lci_beta2, beta2_uci = uci_beta2,
+      beta3 = est_beta3, beta3_lci = lci_beta3, beta3_uci = uci_beta3,
+      sigma1 = est_sigma1, sigma1_lci = lci_sigma1, sigma1_uci = uci_sigma1,
+      sigma2 = est_sigma2, sigma2_lci = lci_sigma2, sigma2_uci = uci_sigma2,
+      rho = est_rho, rho_lci = lci_rho, rho_uci = uci_rho,
+      alpha = est_alpha, alpha_lci = lci_alpha, alpha_uci = uci_alpha
+    )
+  )
+  
+  if (sim %% 10 == 0) cat("Completed:", sim, "simulations\n")
+}
+
+# Add gamma to true values for summary:
+true_values <- c(
+beta1 = 0.5, beta2 = -1, beta3 = 1.5,
+sigma1 = 0.3, sigma2 = 0.5, rho = 0.2, alpha = 2.0)
+
+
+true_values <- c(
+ beta1 = -0.7, beta2 = -1, beta3 = 0.3,
+  sigma1 = 0.866, sigma2 = 0.707, rho = 0.82, alpha = 5.0
+)
+
+results
+# Then summary_table remains same but now includes gammas automatically
+summary_table <- data.frame(
+  Parameter = names(true_values),
+  True = true_values,
+  Mean = sapply(names(true_values), function(param) mean(results[[param]], na.rm = TRUE)),
+  `Mean 2.5% CI` = sapply(names(true_values), function(param) mean(results[[paste0(param, "_lci")]], na.rm = TRUE)),
+  `Mean 97.5% CI` = sapply(names(true_values), function(param) mean(results[[paste0(param, "_uci")]], na.rm = TRUE)),
+  Bias = sapply(names(true_values), function(param) mean(results[[param]], na.rm = TRUE) - true_values[param]),
+  MSE = sapply(names(true_values), function(param) mean((results[[param]] - true_values[param])^2, na.rm = TRUE))
+)
+
+library(knitr)
+kable(summary_table, format = "latex", booktabs = TRUE, digits = 4)
+
+
+
+
+###Application####
+##Load following packages before proceed####
+library(ggplot2)
+library(readr)
+library(dplyr)
+#library(MASS)
+#library(tidyverse)
+#library(lubridate)
+#library(patchwork)
+#library(gghighlight)
+#library(gghighlight)
+library(rstan)
+library(loo)
+library(bayesplot)
+library(shinystan)
+
+library(bayes)
+###########Co2 data#####
+
+getwd()
+
+# Read CSV (replace with your actual file path)
+data <- read_csv("GHG_data.csv", show_col_types = FALSE)
+
+# Define South Asian countries
+south_asia <- c("World",
+                "India", "Pakistan", "Bangladesh", "Nepal", "Sri Lanka", 
+                "Maldives", "Afghanistan")
+
+
+
+# Filter South Asian countries
+sa_data <- data %>%
+  filter(Country %in% south_asia)
+
+# Identify year columns automatically (starts with 19xx or 20xx)
+year_cols <- names(sa_data)[grepl("^19|^20", names(sa_data))]
+
+# Convert all year columns to numeric (safe for character or double)
+sa_data <- sa_data %>%
+  mutate(across(all_of(year_cols), as.numeric))
+
+# Reshape to long format
+library(dplyr)
+library(tidyr)
+
+sa_long <- sa_data %>%
+  mutate(across(all_of(year_cols), as.numeric)) %>%   # ensure numeric
+  pivot_longer(
+    cols = all_of(year_cols),
+    names_to = "Year",
+    values_to = "Value"
+  ) %>%
+  mutate(
+    Year = as.integer(Year),
+    Year_c = Year - 2000     # center year at 1990
+  ) %>%
+  filter(Year >= 2000 & Year <= 2022) %>%  # keep only 2000-2022
+  dplyr::select(ISO, Country, Sector, Gas, Unit, Year, Year_c, Value)
+
+View(sa_long)
+
+summary_by_country <- sa_long%>%
+  group_by(Country) %>%
+  summarise(
+    n = n(),                          # number of observations
+    mean_CO2 = mean(Value, na.rm = TRUE),
+    sd_CO2 = sd(Value, na.rm = TRUE),
+    min_CO2 = min(Value, na.rm = TRUE),
+    max_CO2 = max(Value, na.rm = TRUE)
+  )
+View(summary_by_country)
+# Check result
+head(sa_long)
+View(sa_long)
+summary()
+
+library(ggplot2)
+library(dplyr)
+
+# make sure Year is numeric
+sa_long <- sa_long %>%
+  mutate(Year = as.numeric(Year))
+
+# Plot emissions over time
+
+asia_data <- sa_long %>%
+  dplyr::filter(Country %in% south_asia)
+
+# Separate World and country values
+world_data <- asia_data %>%
+  dplyr::filter(Country == "World") %>%
+  dplyr::select(Year, World_Value = Value)
+
+country_data <- asia_data %>%
+  dplyr::filter(Country != "World")
+
+# Join World values to country data by Year
+ratio_data <- country_data %>%
+  dplyr::left_join(world_data, by = "Year") %>%
+  dplyr::mutate(Ratio = Value / World_Value) %>%
+  dplyr::select(Country, Year, Value, World_Value, Ratio)
+head(ratio_data)
+
+summary_by_country_ratio <- ratio_data %>%
+  group_by(Country) %>%
+  summarise(
+    n = n(),                          # number of observations
+    mean_GHG = mean(Ratio, na.rm = TRUE),
+    sd_GHG = sd(Ratio, na.rm = TRUE),
+    min_GHG = min(Ratio, na.rm = TRUE),
+    max_GHG = max(Ratio, na.rm = TRUE)
+  )
+
+####WDI data##
+#install.packages("WDI")
+library(WDI)
+south_asian_countries <- c("AFG", "BGD", "IND", "MDV", "NPL", "PAK", "LKA")
+WDIsearch("GDP")
+WDIsearch("population growth")
+WDIsearch("renewable energy")
+WDIsearch("institutional quality")
+WDIsearch("CO2")
+library(WDI)
+library(dplyr)
+library(readr)
+
+
+WDIsearch("population")
+WDIsearch("growth")
+##"NY.GDP.PCAP.CD": GDP growth, "SP.URB.GROW": Urban population growth, EG.FEC.RNEW.ZS: %of renewal energy consumpotion
+##"EG.USE.PCAP.KG.OE": Total energy consumption, "EN.POP.DNST": Population density##
+###NV.IND.MANF.ZS: Manufacturing share; 
+
+
+# Download CO2 emissions (kt)
+
+indicators <- c(
+  "NY.GDP.MKTP.CD",    # GDP(current US$) ##not per capita
+  "NY.GDP.MKTP.KD.ZG",  ###GDP growth
+  "SP.URB.GROW",       # Urban population growth (% annual)
+  "EG.FEC.RNEW.ZS",    # Renewable energy consumption (% of total final energy consumption)
+  "EN.POP.DNST" ,       # Population density (people per sq. km of land area)
+  "BX.KLT.DINV.CD.WD",  ##FDI USD; Net inflows##
+  "SP.POP.GROW",       ###Pppulation growth
+  "SP.POP.TOTL"
+)
+
+
+
+# Download data
+south_asia_data <- WDI(
+  country = south_asian_countries,
+  indicator = indicators,
+  start = 2000,
+  end   = 2022,
+  extra = TRUE
+)
+
+
+View(south_asia_data)
+head(data)
+###Total Energy Consumption####
+library(readr)
+
+
+
+ggplot(ratio_data, aes(x = Year, y = Ratio, color = Country)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "GHG Emissions Ratios: South Asia Compared to World",
+    x = "Year",
+    y = "Emissions",
+    color = "Country"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold")
+  )
+
+library(ggplot2)
+
+library(ggplot2)
+
+ggplot(ratio_data, aes(x = Ratio)) +
+  geom_density(color = "black", size = 0.5) +
+  theme_minimal() +
+  labs(
+    title = "",
+    x = "Ratio",
+    y = "Density"
+  )
+
+ggplot(ratio_data, aes(x = Year, y = Value, color = Country)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Total GHG Emissions Over Time (South Asian Countries)",
+    x = "Year",
+    y = "Emissions",
+    color = "Country"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold")
+  )
+
+###Merge three data sets::###
+library(dplyr)
+#install.packages("janitor")
+library(janitor)
+library(dplyr)
+
+
+ratio_data<-ratio_data %>% rename(country=Country,year=Year)
+
+
+
+combined_data <- ratio_data %>%
+  full_join(south_asia_data, by = c("country", "year"))
+
+combined_data <- combined_data %>%
+  arrange(country, year)
+
+
+
+combined_data <- combined_data %>%
+  rename(
+    GDP = NY.GDP.MKTP.CD,       # GDP (current US$)
+    GDP_Growth = NY.GDP.MKTP.KD.ZG, ###GDP growth
+    Urban_pop_growth = SP.URB.GROW,        # Urban population growth (% annual)
+    Renewable_share = EG.FEC.RNEW.ZS,      # Renewable energy consumption (% of total final energy)
+    Pop_density = EN.POP.DNST,              # Population density (people per sq. km)
+    FDI = BX.KLT.DINV.CD.WD,
+    Population_Growth = SP.POP.GROW,  ##Pppulation growth rate
+    Population= SP.POP.TOTL        ###Population
+  )
+
+
+
+glimpse(combined_data)
+names(combined_data)
+library(ggplot2)
+
+dim(combined_data )
+model_data <- combined_data %>%
+  drop_na(year, GDP,GDP_Growth, Urban_pop_growth, Renewable_share,
+          Pop_density, Population_Growth, FDI, Ratio, Population)
+
+names(model_data)
+dim(model_data)
+names(model_data)
+model_data$GDP_log<-log(model_data$GDP)
+model_data$Population_log=log(model_data$Population)
+model_data$Population_mil=model_data$Population/10000000
+model_data$GDP_100<-model_data$GDP/1000000000
+model_data$year_c<-model_data$year-1999
+model_data$year_std <- scale(model_data$year)[,1]
+model_data$FDI_N<-model_data$FDI/100000000
+model_data$Ratio_Scale<-model_data$Ratio*10
+model_data$Pop_density_log<-log(model_data$Pop_density)
+write.csv(model_data,"PubFinalCo2data.csv")
+View(model_data)
+##################################################
+####Summary Statistics of Independent varaibles###
+##################################################
+summary_by_country_pop <- model_data %>%
+  group_by(country) %>%
+  summarise(
+    n = n(),                          # number of observations
+    mean_Population = mean(Population_mil, na.rm = TRUE),
+    sd_Population= sd(Population_mil, na.rm = TRUE),
+    min_Population = min(Population_mil, na.rm = TRUE),
+    max_Population = max(Population_mil, na.rm = TRUE)
+  )
+
+summary_by_country_GDP <- model_data %>%
+  group_by(country) %>%
+  summarise(
+    n = n(),                          # number of observations
+    mean = mean(GDP_log, na.rm = TRUE),
+    sd= sd(GDP_log, na.rm = TRUE),
+    min = min(GDP_log, na.rm = TRUE),
+    max= max(GDP_log, na.rm = TRUE)
+  )
+
+summary_by_country_Urpopgrowth <- model_data %>%
+  group_by(country) %>%
+  summarise(
+    n = n(),                          # number of observations
+    mean = mean(Urban_pop_growth, na.rm = TRUE),
+    sd= sd(Urban_pop_growth, na.rm = TRUE),
+    min = min(Urban_pop_growth, na.rm = TRUE),
+    max= max(Urban_pop_growth, na.rm = TRUE)
+  )
+
+summary_by_country_Renewable_share <- model_data %>%
+  group_by(country) %>%
+  summarise(
+    n = n(),                          # number of observations
+    mean = mean(Renewable_share, na.rm = TRUE),
+    sd= sd(Renewable_share, na.rm = TRUE),
+    min = min(Renewable_share, na.rm = TRUE),
+    max= max(Renewable_share, na.rm = TRUE)
+  )
+
+summary(model_data$Ratio*10)
+
+X<-model.matrix(~ year_std+Population_mil+GDP_log+Urban_pop_growth+Renewable_share,data=model_data)
+K= ncol(X)
+dim(X)
+ID <- as.numeric(factor(model_data$country))
+data.unit.mixed<-list(n=length(model_data$Ratio),u=0.75,K= ncol(X), M=max(ID), y=model_data$Ratio, X=X, year_std=model_data$year_std,id=ID,b0=rep(0,K),B0=diag(100,K))
+
+summary(model_data)
+
+
+# Suppose K = ncol(X), M = number of groups (unique id)
+inits3 <- function(chain_id = 1) {
+  set.seed(123 + chain_id)
+  
+  K <- ncol(data.unit.mixed$X)
+  M <- max(data.unit.mixed$id)
+  
+  list(
+    beta    = rep(0, K),                  # start at 0
+    sigma_b = rep(0.1, 2),                # very small positive values
+    z_b     = matrix(0, 2, M),            # start at 0
+    L_b     = diag(2),                     # identity
+    alpha   = runif(1, 0.5, 1.8)                             # safe positive value
+  )
+}
+
+inits1 <- function() {
+  K <- ncol(data.unit.mixed$X)
+  M <- max(data.unit.mixed$id)
+  list(
+    beta    = rnorm(K, 0, 0.01),
+    sigma_b = runif(2, 0.05, 0.2),
+    z_b     = matrix(rnorm(2 * M, 0, 0.05), nrow = 2, ncol = M),
+    L_b     = diag(2),
+    alpha   = runif(1, 0.5, 1.8)
+  )
+}
+
+inits_opt <- function(chain_id = 1) {
+  set.seed(123 + chain_id)   # ensures different chains get different seeds
+  
+  K <- ncol(data.unit.mixed$X)
+  M <- max(data.unit.mixed$id)
+  
+  list(
+    beta    = rnorm(K, 0, 0.001),        # small random around 0
+    sigma_b = runif(2, 0.05, 0.15),      # small positive values
+    z_b     = matrix(rnorm(2 * M, 0, 0.001), nrow = 2, ncol = M),  # near 0
+    L_b     = diag(2),                    # identity correlation
+    alpha   = runif(1, 0.5, 2)          # positive, safe range
+  )
+}
+
+
+
+
+
+
+View(model_data)
+summary(model_data$GDP_log)
+start_time <- Sys.time()
+model0<- stan(model_code = QULL_Model, data = data.unit.mixed, 
+              iter = 8000, chains = 4,cores=4,seed=1234,init=inits_opt,control = list(adapt_delta = 0.97, max_treedepth = 15))
+
+model025<- stan(model_code = QULL_Model, data = data.unit.mixed, 
+              iter = 8000, chains = 4,cores=4,seed=1234,init=inits_opt,control = list(adapt_delta = 0.97, max_treedepth = 15))
+
+model075<- stan(model_code = QULL_Model, data = data.unit.mixed, 
+                iter = 8000, chains = 4,cores=4,seed=1234,init=inits_opt,control = list(adapt_delta = 0.97, max_treedepth = 15))
+
+model1<- stan(model_code = QULL_Model, data = data.unit.mixed, 
+              iter = 8000, chains = 4,cores=4,seed=1234,control = list(adapt_delta = 0.97, max_treedepth = 15))
+
+end_time <- Sys.time()
+elapsed <- end_time - start_time
+print(elapsed)
+tab<- summary(model075, pars= c("beta[1]","beta[2]","beta[3]","beta[4]","beta[5]","beta[6]","sigma_b[1]","sigma_b[2]","Rho[1,2]","alpha"), chain=0, digits = 5)$summary
+tab<- round(tab, 4)
+tab
+summary(model025)
+### Using coda package ###########
+library(coda)
+
+# Extract parameters
+ex <- rstan::extract(model0)
+ex <- rstan::extract(model0)
+names(ex)
+
+params <- ex[c("beta[1]","beta[2]","beta[3]","beta[4]",
+               "beta[5]","beta[6]",
+               "sigma_b[1]","sigma_b[2]",
+               "Rho[1,2]","alpha")]
+
+ex_df <- as.data.frame(params25)
+ex_mcmc <- as.mcmc(ex_df)
+HPDinterval(ex_mcmc)
+
+ex <- rstan::extract(model025)
+
+# Select parameters of interest
+param_names <- c("beta[1]", "beta[2]", "beta[3]", "beta[4]",
+                 "beta[5]", "beta[6]", "sigma_b[1]", "sigma_b[2]",
+                 "Rho[1,2]", "alpha")
+
+# Convert each to vector and combine into a data frame
+ex_list <- lapply(param_names, function(p) {
+  as.vector(ex[[p]])
+})
+
+# Name the columns
+ex_df <- as.data.frame(ex_list)
+names(ex_df) <- param_names
+
+# Convert to mcmc object for HPD interval
+ex_mcmc <- as.mcmc(ex_df)
+prob_pos <- sapply(ex_df, function(x) mean(x > 0))
+prob_neg <- sapply(ex_df, function(x) mean(x < 0))
+
+HPDinterval(ex_mcmc , prob = 0.89)
+# Compute 95% HPD intervals
+HPDinterval(r, prob = 0.95)
+
+library(coda)
+
+# Extract posterior samples
+ex <- rstan::extract(model075)
+
+# Create data frame of scalar/vector parameters
+ex_df <- data.frame(
+  beta1 = ex$beta[,1],
+  beta2 = ex$beta[,2],
+  beta3 = ex$beta[,3],
+  beta4 = ex$beta[,4],
+  beta5 = ex$beta[,5],
+  beta6 = ex$beta[,6],
+  sigma_b1 = ex$sigma_b[,1],
+  sigma_b2 = ex$sigma_b[,2],
+  Rho12 = ex$Rho[,1,2],  # this is now a vector
+  alpha = ex$alpha
+)
+
+# Convert to mcmc object
+ex_mcmc <- as.mcmc(ex_df)
+
+# 90% HPD interval
+hpd_90 <- HPDinterval(ex_mcmc, prob = 0.90)
+
+# Probability of positive and negative sign
+prob_pos <- colMeans(ex_df > 0)
+prob_neg <- colMeans(ex_df < 0)
+
+# Summary table
+summary_table <- cbind(
+  Mean = colMeans(ex_df),
+  SD = apply(ex_df, 2, sd),
+  HPD_Lower = hpd_90[,1],
+  HPD_Upper = hpd_90[,2],
+  Prob_Pos = prob_pos,
+  Prob_Neg = prob_neg
+)
+
+summary_table
+
+
+pairs(model0, pars = c("beta[1]","beta[2]","beta[3]","beta[4]","beta[5]","beta[6]","sigma_b[1]","sigma_b[2]","alpha"))
+library(shinystan)
+launch_shinystan(model0)
+##########Trace Plot######
+###Trace Plot for Betas##
+trace<- stan_trace(model0, pars = c("beta[1]","beta[2]","beta[3]","beta[4]","beta[5]","beta[6]","sigma_b[1]","sigma_b[2]","alpha"), alpha=1)
+trace1<- trace + scale_color_manual(values = c( "blue", "green","orange","black"))
+
+trace + scale_color_brewer(type = "div") + theme(legend.position = "top")
+
+facet_style<- theme(strip.background = ggplot2::element_rect(fill = "gold"), 
+                    strip.text = ggplot2::element_text(size = 8, color = "blue"))
+
+(trace<- trace1 + facet_style) # very good for report
+
+
+library(bayesplot)
+params0 <- rstan::extract(model1)
+color_scheme_set("viridis")
+a1 <- ppc_dens_overlay(model_data$Ratio, params0$y_sim[1:50, ]) ###PPC density 
+a1
+b1<- ppc_ecdf_overlay(model_data$Ratio, params0$y_sim[1:50, ]) ##PPC ECDF
+b1 <- bayesplot_grid(b1)
+b1
+box<-ppc_boxplot(model_data$Ratio, params0$y_sim[1:7, ])  ##PPC box plot
+Hist<-ppc_hist(model_data$Ratio, params0$y_sim[1:7, ])  ###PPC histogram
+
+###ACF Plots###
+mcmc_acf(model0, pars = c("beta[1]","beta[2]","beta[3]","beta[4]","beta[5]","beta[6]","sigma_b[1]","sigma_b[2]","alpha"))
+
+#####Looic and waic###
+library(loo)
+###Looic=-2406.67 and waic=-2407.23##
+#### sigma~N(0,1) theta~exp(2), lkg(1)####
+M1looIC <- loo(model0 , save_psis = TRUE)
+M1waic<-waic(extract_log_lik(model0))
+looic.1<-M1looIC$estimates[3,1]
+waic.1<-M1waic$estimates[3,1]
+looic.1
+waic.1
+
+###Looic=-2490.62 and waic=-2492.65##
+#### sigma~N(0,1) theta~exp(1), lkg(1)####
+##Some chain diverge###
+M1looIC <- loo(model0 , save_psis = TRUE)
+M1waic<-waic(extract_log_lik(model0))
+looic.1<-M1looIC$estimates[3,1]
+waic.1<-M1waic$estimates[3,1]
+looic.1
+waic.1
+
+###Looic=-2528.57 and waic=-2528.26##
+#### sigma~N(0,1) theta~exp(0.5), lkg(1)####
+##Some chain diverge###
+M1looIC <- loo(model0 , save_psis = TRUE)
+M1waic<-waic(extract_log_lik(model0))
+looic.1<-M1looIC$estimates[3,1]
+waic.1<-M1waic$estimates[3,1]
+looic.1
+waic.1
+
+
+
+
+
+
+
+
+#####P-values###
+# ppc pvalue plot###
+params.n= rstan::extract(model1)
+yrep <-  params.n$y_sim
+y<-model_data$Ratio
+plot1 <- ppc_stat(y, yrep, stat = "mean")
+plot2 <- ppc_stat(y, yrep, stat = "median")
+plot3 <- ppc_stat(y, yrep, stat = "var")
+
+# calculate proportion of stat(yrep) > stat(y)
+library(ggplot2)
+p_value_mean <- mean(apply(yrep, 1, mean) > mean(y))
+p_value_median <- mean(apply(yrep, 1, median) > median(y))
+p_val_variance <- mean(apply(yrep, 1, var) > var(y))
+
+p_value_median <- mean(abs(apply(yrep, 1, median) - median(yrep)) >= abs(median(y) - median(yrep)))
+
+plot4<-plot1 + 
+  yaxis_text() +    # helps see y-axis labels while positioning
+  annotate("text", x = 0.0112, y = 100, label = paste("p =", round(p_value_mean, 4)))
+
+plot5<-plot3 + 
+  yaxis_text() +    # helps see y-axis labels while positioning
+  annotate("text", x = 0.00045, y = 1000, label = paste("p =", round(p_val_variance, 4)))
+
+############Co2 data#####
+library(dplyr)
+library(tidyr)
+sa_long <- as.data.frame(sa_long)
+
+# Filter Asian countries + World
+
+
+
+summary(sa_long$Year)
+sa_long <- sa_long %>%
+  mutate(
+    Country = factor(Country),
+    Year_c = Year - 1990   # center year at 1990
+  )
+hist(log(sa_long$Value))
+yj_transform <- powerTransform(Value ~ 1, data = sa_long, family = "yjPower")
+yj_transform
+sa_long$Value_yj <- yjPower(sa_long$Value, lambda = yj_transform$lambda)
+library(lme4)
+library(lme4)
+library(glmmTMB)
+
+
+
+
+
+
+model <- glmer(Ratio ~ Year  + (1+Year | Country),
+               family = Gamma(link = "log"),
+               data = ratio_data)
+
+#####BRMS#########
+library(brms)
+library(dplyr)
+
+# Log-transform Value
+
+
+# Set priors
+priors <- c(
+  prior(normal(0, 100), class = "b"),           # fixed effects
+  prior(student_t(3, 0, 10), class = "Intercept"),
+  prior(student_t(3, 0, 10), class = "sigma"),
+  prior(gamma(5,1), class = "nu"),         # degrees of freedom
+  prior(exponential(1), class = "sd")         # random effect SDs
+)
+
+# Fit Student-t mixed model
+fit <- brm(
+  formula = Value ~ Year + (1 + Year | Country),
+  data = sa_long,
+  family = student(),
+  prior = priors,
+  chains = 4,
+  iter = 4000,
+  warmup = 2000,
+  control = list(adapt_delta = 0.99, max_treedepth = 15)
+)
+
+# Quick posterior check
+library(bayesplot)
+summary(fit)
+pp_check(fit)  # posterior predictive check
+
+check_hmc_diagnostics(fit$fit)
+pairs(fit)
+
+
+
+#############################################
+summary(model)
+library(DHARMa)
+res <- simulateResiduals(model1)
+plot(res)
+
+devtools::install_github("hollyyfc/lme4u")
+library(lme4u)
+library(lme4)
+names(model_data)
+combined_data
+model_data$year_c<-model_data$year-2000
+m1 <- lmer(log(Value)~ year_c +Population_mil+GDP_log+I(GDP_log^2)+Urban_pop_growth+Renewable_share+ (1+year_c | country), data = model_data)
+summary(m1)
+#install.packages("lmerTest")
+#install.packages("parameters")
+#install.packages("broom.mixed")
+#install.packages("bayestestR")
+#install.packages("parameters")
+library(lmerTest)
+library(parameters)
+library(broom.mixed)
+
+tidy_m1 <- broom.mixed::tidy(m1, effects = "fixed", conf.int = TRUE, conf.level = 0.95)
+tidy_m1
+#####To specify correlations###
+log(model_data$GDP^2)
+library(nlme)
+m_nlme <- lme(log(Value) ~ year_c + log(Population_mil) + GDP_log + Urban_pop_growth + Renewable_share,
+              random = ~ 1 + year_c | country,
+              data = model_data,
+              method = "REML")
+m_glmm <- glmer(Value ~ year_c + Population_mil + GDP_log + Urban_pop_growth + Renewable_share + (1 + year_c | country),
+                family = Gamma(link = "log"), data = model_data)
+
+summary(m_glmm)
+install.packages("robustlmm")
+
+library(robustlmm)
+
+m_robust <- rlmer(
+  log(Value) ~ year_c + log(Population_mil) + GDP_log + Urban_pop_growth + Renewable_share + (1 + year_c | country),
+  data = model_data
+  
+)
+summary(m_robust)
+# Model with AR(1) residual correlation
+m_nlme_ar1 <- lme(log(Value) ~ year_c + log(Population_mil) + GDP_log +I(GDP_log^2)+ Urban_pop_growth + Renewable_share,
+                  random = ~ 1 + year_c | country,
+                  correlation = corAR1(form = ~ year_c | country),
+                  data = model_data,
+                  method = "REML")
+
+library(lqmm)
+
+
+summary(m_nlme_ar1)
+install.packages("sjPlot")
+library(sjPlot)
+res <- residuals(m_nlme_ar1, type = "pearson")
+
+plot(m_nlme_ar1)
+library(ggplot2)
+AIC(m1)
+
+resid_vals <- residuals(m_nlme_ar1, type = "response") 
+shapiro_test <- shapiro.test(resid_vals)
+mar_resid_vals <- residuals(m_nlme, type = "response", level = 0)
+shapiro_test_mar <- shapiro.test(mar_resid_vals)
+
+
+
+res_norm(m1)
+res_fit(m1)
+res_box(m1, group_var = "country")
+resid_vals <- residuals(m1)
+shapiro_test <- shapiro.test(resid_vals)
+summary(resid_vals)
+hist(resid_vals)
+
+resid_vals <- resid(m_nlme_ar1)
+summary(resid_vals)
+library(car)
+# QQ plot with confidence envelope
+qqPlot(resid_vals, 
+       main = "QQ Plot of Residuals with Confidence Band",
+       envelope = 0.95)
+
+#devtools::install_github("goodekat/redres")
+
+library(redres)
+plot_redres(m1, type = "std_cond")
+
+plot_resqq(m1)
+plot_ranef(m1)
+
+
+m_qmm <- lqmm(
+  fixed = Value ~ year_c + Population_mil + GDP_log + Urban_pop_growth + Renewable_share,
+  random = ~ year_c,           # random slope
+  group = country,             # grouping factor
+  tau = 0.5,
+  data = model_data,
+  control = lqmmControl(LP_max_iter = 1000, startQR = TRUE)
+)
+summary(m_qmm)
+###################BRMS############
+# Bayesian quantile mixed model (median)
+library(dplyr)
+
+model_data <- model_data %>%
+  rename(
+    Country = country,
+    Year = Year,
+    PopulationMil = `Population (mil.)`,
+    LogGDP = `log(GDP)`,
+    UrbanPG = `Urban PG.`,
+    RenewableE = `Renewable E.`
+  )
+names(model_data)
+
+library(brms)
+library(brms)
+
+library(brms)
+
+library(brms)
+
+fit <- brm(
+  formula = log(GHG) ~ Year + PopulationMil+ LogGDP+I(LogGDP^2)+
+    UrbanPG + RenewableE +
+    (1 + Year | Country),
+  data = model_data,
+  family = gaussian(),
+  chains = 4,
+  cores = 4,
+  iter = 8000,
+  warmup = 4000,
+  control = list(adapt_delta = 0.95, max_treedepth = 15)
+)
+
+
+
+
+####Fixed Effect###
+fixef_table <- summary(fit)$fixed
+fixef_table <- round(fixef_table, 4)
+fixef_table <- as.data.frame(fixef_table)
+fixef_table$Parameter <- rownames(fixef_table)
+fixef_table <- fixef_table[, c("Parameter", "Estimate", "Est.Error", "l-95% CI", "u-95% CI", "Rhat", "Bulk_ESS", "Tail_ESS")]
+fixef_table
+###Random Effect###
+ranef_table <- summary(fit)$random$Country  # Replace 'country' with your grouping factor
+ranef_table <- round(ranef_table, 4)
+ranef_table$Parameter <- rownames(ranef_table)
+ranef_table <- ranef_table[, c("Parameter", "Estimate", "Est.Error", "l-95% CI", "u-95% CI", "Rhat", "Bulk_ESS", "Tail_ESS")]
+ranef_table
+###SD###
+sigma_table <- summary(fit)$spec_pars
+sigma_table <- round(sigma_table, 4)
+sigma_table$Parameter <- rownames(sigma_table)
+sigma_table <- sigma_table[, c("Parameter", "Estimate", "Est.Error", "l-95% CI", "u-95% CI", "Rhat", "Bulk_ESS", "Tail_ESS")]
+sigma_table
+
+full_table <- rbind(fixef_table,ranef_table, sigma_table)
+full_table
+
+library(dplyr)
+library(xtable)
+
+# Suppose full_table is already created and rounded to 4 decimals
+# full_table <- rbind(ranef_table, fixef_table, sigma_table)
+
+# Optional: reorder for display
+full_table <- full_table %>%
+  select(Parameter, Estimate, Est.Error, `l-95% CI`, `u-95% CI`, Rhat, Bulk_ESS, Tail_ESS)
+
+# Create LaTeX table
+latex_table <- xtable(full_table,
+                      caption = "Posterior Summary of Model Parameters",
+                      label = "tab:model_summary",
+                      digits = c(0, 0, 4, 4, 4, 4, 4, 0, 0)) # first 0 = no rounding for row numbers
+
+print(latex_table, include.rownames = FALSE, 
+      caption.placement = "top", 
+      booktabs = TRUE, 
+      floating = TRUE)
+
+
+
+
+summary(fit)
+conditional_effects(fit)
+summary(fit_q)       # R-hat, ESS, posterior means
+plot(fit)          # trace plots
+
+pp_check(fit_q)      # posterior predictive check
+library(bayesplot)
+library(ggplot2)
+
+# All parameters in one vector
+params <- c(
+  "b_Intercept",
+  "b_Year",
+  "b_PopulationMil",
+  "b_LogGDP",
+  "b_UrbanPG",
+  "b_RenewableE",
+  "sd_Country__Intercept", "sd_Country__Year",
+  "cor_Country__Intercept__Year",
+  "sigma"
+)
+
+
+# Trace plot
+trace_plot1 <- mcmc_trace(fit, pars=params)
+                  
+
+trace_plot1
+
+mcmc_acf(fit,pars=params)
+stancode(fit)
+
+pp_check(fit, ndraws = 500)
+pp_check(fit, ndraws = 500, type = "ecdf_overlay")
+
+
+post <- as_draws_df(fit)
+
+
+sapply(grep("^b_", names(post), value = TRUE),
+       \(v) mean(post[[v]] > 0))
+
+posterior_summary(fit, probs = c(0.05, 0.95))
+# Get 90% credible intervals for all parameters
+posterior_interval(fit, prob = 0.85)
+
+
+
