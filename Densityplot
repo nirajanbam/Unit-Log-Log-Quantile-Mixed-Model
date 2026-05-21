@@ -1,0 +1,127 @@
+# ==========================================================
+# QULL density function
+# ==========================================================
+
+dQULL <- function(y, alpha, mu, u = 0.5) {
+  
+  ly  <- -log(y)
+  lmu <- -log(mu)
+  
+  exponent <- (ly^alpha) * (lmu^(-alpha))
+  
+  f <- (alpha / y) *
+    (ly)^(alpha - 1) *
+    (lmu)^(-alpha) *
+    log(1 - log(u)) *
+    ((1 - log(u))^(exponent)) *
+    exp(1 - ((1 - log(u))^(exponent)))
+  
+  return(f)
+}
+
+# Grid
+y <- seq(0.01, 0.999, length.out = 500)
+
+u_val <- 0.5
+
+
+cols <- c("blue", "red", "darkgreen", "purple")
+
+# ==========================================================
+# PLOT 1: alpha = 2, varying mu
+# ==========================================================
+
+mu_vals <- c(0.10, 0.25, 0.50, 0.75)
+alpha_fixed <- 2
+
+plot(NULL,
+     xlim = c(0,1),
+     ylim = c(0,10),
+     xlab = "y",
+     ylab = "Density")
+
+for(i in seq_along(mu_vals)){
+  
+  lines(y,
+        dQULL(y, alpha_fixed, mu_vals[i], u_val),
+        col = cols[i],
+        lwd = 2)
+}
+
+legend("top",
+       legend = c(
+         expression(u == 0.5 ~ "," ~ alpha == 2 ~ "," ~ mu == 0.10),
+         expression(u == 0.5 ~ "," ~ alpha == 2 ~ "," ~ mu == 0.25),
+         expression(u == 0.5 ~ "," ~ alpha == 2 ~ "," ~ mu == 0.50),
+         expression(u == 0.5 ~ "," ~ alpha == 2 ~ "," ~ mu == 0.75)
+       ),
+       col = cols,
+       lwd = 2,
+       bty = "box",
+       cex = 0.85)
+
+# ==========================================================
+# PLOT 2: alpha = 0.5, varying mu
+# ==========================================================
+
+alpha_fixed <- 0.5
+mu_vals <- c(0.1, 0.25, 0.75, 0.9)
+plot(NULL,
+     xlim = c(0,1),
+     ylim = c(0,15),
+     xlab = "y",
+     ylab = "Density")
+
+for(i in seq_along(mu_vals)){
+  
+  lines(y,
+        dQULL(y, alpha_fixed, mu_vals[i], u_val),
+        col = cols[i],
+        lwd = 2)
+}
+
+legend("top",
+       legend = c(
+         expression(u == 0.5 ~ "," ~ alpha == 0.25 ~ "," ~ mu == 0.10),
+         expression(u == 0.5 ~ "," ~ alpha == 0.50 ~ "," ~ mu == 0.25),
+         expression(u == 0.5 ~ "," ~ alpha == 1.00 ~ "," ~ mu == 0.75),
+         expression(u == 0.5 ~ "," ~ alpha == 2.00 ~ "," ~ mu == 0.9)
+       ),
+       col = cols,
+       lwd = 2,
+       bty = "box",
+       cex = 0.85)
+
+# ==========================================================
+# PLOT 3: varying alpha AND mu (paired)
+# ==========================================================
+
+alpha_vals <- c(0.25, 0.5, 1, 2)
+mu_vals3   <- c(0.10, 0.95, 0.50, 0.05)
+
+plot(NULL,
+     xlim = c(0,1),
+     ylim = c(0,20),
+     xlab = "y",
+     ylab = "Density")
+
+for(i in seq_along(alpha_vals)){
+  
+  lines(y,
+        dQULL(y, alpha_vals[i], mu_vals3[i], u_val),
+        col = cols[i],
+        lwd = 2)
+}
+
+legend("top",
+       legend = c(
+         expression(u == 0.5 ~ "," ~ alpha == 0.25 ~ "," ~ mu == 0.10),
+         expression(u == 0.5 ~ "," ~ alpha == 0.50 ~ "," ~ mu == 0.95),
+         expression(u == 0.5 ~ "," ~ alpha == 1.00 ~ "," ~ mu == 0.50),
+         expression(u == 0.5 ~ "," ~ alpha == 2.00 ~ "," ~ mu == 0.05)
+       ),
+       col = cols,
+       lwd = 2,
+       bty = "box",
+       cex = 0.85)
+
