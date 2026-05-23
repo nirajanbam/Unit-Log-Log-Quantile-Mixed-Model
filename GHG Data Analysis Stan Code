@@ -367,15 +367,6 @@ inits_opt <- function(chain_id = 1) {
 model05<- stan(model_code = QULL_Model, data = data.unit.mixed, 
               iter = 8000, chains = 4,cores=4,seed=1234,init=inits_opt,control = list(adapt_delta = 0.97, max_treedepth = 15))
 
-model025<- stan(model_code = QULL_Model, data = data.unit.mixed, 
-                iter = 8000, chains = 4,cores=4,seed=1234,init=inits_opt,control = list(adapt_delta = 0.97, max_treedepth = 15))
-
-model075<- stan(model_code = QULL_Model, data = data.unit.mixed, 
-                iter = 8000, chains = 4,cores=4,seed=1234,init=inits_opt,control = list(adapt_delta = 0.97, max_treedepth = 15))
-
-model1<- stan(model_code = QULL_Model, data = data.unit.mixed, 
-              iter = 8000, chains = 4,cores=4,seed=1234,control = list(adapt_delta = 0.97, max_treedepth = 15))
-
 end_time <- Sys.time()
 elapsed <- end_time - start_time
 print(elapsed)
