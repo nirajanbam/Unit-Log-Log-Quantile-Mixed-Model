@@ -1,0 +1,877 @@
+#################################################
+####Stan Code For Prior Sensitivity Analysis#####
+################################################
+
+Prior1<-"functions {
+  // Custom log-PDF for your QULL distribution
+  real Q_custom_lpdf(real y, real alpha, real mu, real u) {
+    real term1;
+    real term2;
+    real term3;
+    real term4;
+    real term5;
+    real term6;
+    real term7;
+    real exponent;
+
+    // compute common exponent
+    exponent = pow(-log(y), alpha) * pow(-log(mu), -alpha);
+
+    // log(alpha / y)
+    term1 = log(alpha);
+    term2 = -log(y);
+
+    // (-log y)^(alpha - 1)
+    term3 = (alpha - 1) * log(-log(y));
+
+    // (-log mu)^(-alpha)
+    term4 = -alpha * log(-log(mu));
+
+    // log(log(1 - log u))
+    term5 = log(log(1 - log(u)));
+
+    // [(1 - log u)^( -log mu^-alpha )]^( -log y^alpha )
+    term6 = exponent * log(1 - log(u));
+
+    // exp{1 - [...] } -> log(exp{1 - [...]}) = 1 - [...]
+    term7 = 1 - pow(1 - log(u), exponent);
+
+    return term1 + term2 + term3 + term4 + term5 + term6 + term7;
+  }
+  real Q_custom_rng(real alpha, real mu, real u) {
+    real p;
+    real B;
+    real denom_log;
+    real numer_log;
+    real y;
+
+    // Sample p ~ Uniform(0,1)
+    p = uniform_rng(0, 1);
+
+    // Compute intermediate values
+    B = -log(mu);
+    denom_log = log(1 - log(u));
+    numer_log = log(1 - log(p));
+
+    // Compute the quantile
+    y = exp( - B * pow(numer_log / denom_log, 1 / alpha) );
+    return y;
+  }
+}
+
+data {
+  int<lower=0> n;                 // number of observations
+  int<lower=0> M;                 // number of groups
+  real<lower=0, upper=1> y[n];    // response
+  int<lower=1> K;                 // number of predictors
+  matrix[n, K] X;                 // design matrix
+  int<lower=1, upper=M> id[n];    // group ID
+  vector[K] b0;                    // prior mean for beta
+  matrix[K, K] B0;                 // prior covariance for beta
+  real<lower=0, upper=1> u;       // fixed u
+}
+
+parameters {
+  vector[K] beta;                 
+  vector<lower=0>[2] sigma_b;     
+  matrix[2, M] z_b;               
+  cholesky_factor_corr[2] L_b;    
+  real<lower=0> alpha;            
+}
+
+transformed parameters {
+  vector<lower=0, upper=1>[n] mu;
+  vector[n] eta_mu;
+  matrix[2, M] b;
+  
+  b = diag_pre_multiply(sigma_b, L_b) * z_b;
+  eta_mu = X * beta;
+  
+  for (i in 1:n)
+    mu[i] = inv_logit(eta_mu[i] + b[1, id[i]] + b[2, id[i]] * X[i, 2]);
+}
+
+model {
+  // Priors
+  L_b ~ lkj_corr_cholesky(1.0);
+  to_vector(z_b) ~ normal(0, 1);
+  beta ~ multi_normal(b0, B0);
+  sigma_b ~ normal(0,1);
+  alpha ~ exponential(0.5);
+  
+  // Likelihood
+  for (i in 1:n)
+    target += Q_custom_lpdf(y[i] | alpha, mu[i], u);
+}
+generated quantities {
+  matrix[2, 2] Rho;
+  vector[n] log_lik;
+  vector[n] y_sim;
+
+  // Compute correlation matrix
+  Rho = multiply_lower_tri_self_transpose(L_b);
+
+  // Compute log-likelihood for observed data
+  for (i in 1:n)
+    log_lik[i] = Q_custom_lpdf(y[i] | alpha, mu[i], u);
+
+  // Simulate new data using custom RNG
+  for (i in 1:n)
+    y_sim[i] = Q_custom_rng(alpha, mu[i], 0.5);
+}"
+
+
+Prior2<-"functions {
+  // Custom log-PDF for your QULL distribution
+  real Q_custom_lpdf(real y, real alpha, real mu, real u) {
+    real term1;
+    real term2;
+    real term3;
+    real term4;
+    real term5;
+    real term6;
+    real term7;
+    real exponent;
+
+    // compute common exponent
+    exponent = pow(-log(y), alpha) * pow(-log(mu), -alpha);
+
+    // log(alpha / y)
+    term1 = log(alpha);
+    term2 = -log(y);
+
+    // (-log y)^(alpha - 1)
+    term3 = (alpha - 1) * log(-log(y));
+
+    // (-log mu)^(-alpha)
+    term4 = -alpha * log(-log(mu));
+
+    // log(log(1 - log u))
+    term5 = log(log(1 - log(u)));
+
+    // [(1 - log u)^( -log mu^-alpha )]^( -log y^alpha )
+    term6 = exponent * log(1 - log(u));
+
+    // exp{1 - [...] } -> log(exp{1 - [...]}) = 1 - [...]
+    term7 = 1 - pow(1 - log(u), exponent);
+
+    return term1 + term2 + term3 + term4 + term5 + term6 + term7;
+  }
+  real Q_custom_rng(real alpha, real mu, real u) {
+    real p;
+    real B;
+    real denom_log;
+    real numer_log;
+    real y;
+
+    // Sample p ~ Uniform(0,1)
+    p = uniform_rng(0, 1);
+
+    // Compute intermediate values
+    B = -log(mu);
+    denom_log = log(1 - log(u));
+    numer_log = log(1 - log(p));
+
+    // Compute the quantile
+    y = exp( - B * pow(numer_log / denom_log, 1 / alpha) );
+    return y;
+  }
+}
+
+data {
+  int<lower=0> n;                 // number of observations
+  int<lower=0> M;                 // number of groups
+  real<lower=0, upper=1> y[n];    // response
+  int<lower=1> K;                 // number of predictors
+  matrix[n, K] X;                 // design matrix
+  int<lower=1, upper=M> id[n];    // group ID
+  vector[K] b0;                    // prior mean for beta
+  matrix[K, K] B0;                 // prior covariance for beta
+  real<lower=0, upper=1> u;       // fixed u
+}
+
+parameters {
+  vector[K] beta;                 
+  vector<lower=0>[2] sigma_b;     
+  matrix[2, M] z_b;               
+  cholesky_factor_corr[2] L_b;    
+  real<lower=0> alpha;            
+}
+
+transformed parameters {
+  vector<lower=0, upper=1>[n] mu;
+  vector[n] eta_mu;
+  matrix[2, M] b;
+  
+  b = diag_pre_multiply(sigma_b, L_b) * z_b;
+  eta_mu = X * beta;
+  
+  for (i in 1:n)
+    mu[i] = inv_logit(eta_mu[i] + b[1, id[i]] + b[2, id[i]] * X[i, 2]);
+}
+
+model {
+  // Priors
+  L_b ~ lkj_corr_cholesky(2.0);
+  to_vector(z_b) ~ normal(0, 1);
+  beta ~ multi_normal(b0, B0);
+  sigma_b ~ normal(0,1);
+  alpha ~ exponential(0.5);
+  
+  // Likelihood
+  for (i in 1:n)
+    target += Q_custom_lpdf(y[i] | alpha, mu[i], u);
+}
+generated quantities {
+  matrix[2, 2] Rho;
+  vector[n] log_lik;
+  vector[n] y_sim;
+
+  // Compute correlation matrix
+  Rho = multiply_lower_tri_self_transpose(L_b);
+
+  // Compute log-likelihood for observed data
+  for (i in 1:n)
+    log_lik[i] = Q_custom_lpdf(y[i] | alpha, mu[i], u);
+
+  // Simulate new data using custom RNG
+  for (i in 1:n)
+    y_sim[i] = Q_custom_rng(alpha, mu[i], 0.5);
+}"
+
+Prior3<-"functions {
+ // Custom log-PDF for your QULL distribution
+  real Q_custom_lpdf(real y, real alpha, real mu, real u) {
+    real term1;
+    real term2;
+    real term3;
+    real term4;
+    real term5;
+    real term6;
+    real term7;
+    real exponent;
+
+    // compute common exponent
+    exponent = pow(-log(y), alpha) * pow(-log(mu), -alpha);
+
+    // log(alpha / y)
+    term1 = log(alpha);
+    term2 = -log(y);
+
+    // (-log y)^(alpha - 1)
+    term3 = (alpha - 1) * log(-log(y));
+
+    // (-log mu)^(-alpha)
+    term4 = -alpha * log(-log(mu));
+
+    // log(log(1 - log u))
+    term5 = log(log(1 - log(u)));
+
+    // [(1 - log u)^( -log mu^-alpha )]^( -log y^alpha )
+    term6 = exponent * log(1 - log(u));
+
+    // exp{1 - [...] } -> log(exp{1 - [...]}) = 1 - [...]
+    term7 = 1 - pow(1 - log(u), exponent);
+
+    return term1 + term2 + term3 + term4 + term5 + term6 + term7;
+  }
+  real Q_custom_rng(real alpha, real mu, real u) {
+    real p;
+    real B;
+    real denom_log;
+    real numer_log;
+    real y;
+
+    // Sample p ~ Uniform(0,1)
+    p = uniform_rng(0, 1);
+
+    // Compute intermediate values
+    B = -log(mu);
+    denom_log = log(1 - log(u));
+    numer_log = log(1 - log(p));
+
+    // Compute the quantile
+    y = exp( - B * pow(numer_log / denom_log, 1 / alpha) );
+    return y;
+  }
+}
+
+data {
+  int<lower=0> n;                 // number of observations
+  int<lower=0> M;                 // number of groups
+  real<lower=0, upper=1> y[n];    // response
+  int<lower=1> K;                 // number of predictors
+  matrix[n, K] X;                 // design matrix
+  int<lower=1, upper=M> id[n];    // group ID
+  vector[K] b0;                    // prior mean for beta
+  matrix[K, K] B0;                 // prior covariance for beta
+  real<lower=0, upper=1> u;       // fixed u
+}
+
+parameters {
+  vector[K] beta;                 
+  vector<lower=0>[2] sigma_b;     
+  matrix[2, M] z_b;               
+  cholesky_factor_corr[2] L_b;    
+  real<lower=0> alpha;            
+}
+
+transformed parameters {
+  vector<lower=0, upper=1>[n] mu;
+  vector[n] eta_mu;
+  matrix[2, M] b;
+  
+  b = diag_pre_multiply(sigma_b, L_b) * z_b;
+  eta_mu = X * beta;
+  
+  for (i in 1:n)
+    mu[i] = inv_logit(eta_mu[i] + b[1, id[i]] + b[2, id[i]] * X[i, 2]);
+}
+
+model {
+  // Priors
+  L_b ~ lkj_corr_cholesky(2.0);
+  to_vector(z_b) ~ normal(0, 1);
+  beta ~ multi_normal(b0, B0);
+  sigma_b ~ normal(0,1);
+  alpha ~ exponential(1);
+  
+  // Likelihood
+  for (i in 1:n)
+    target += Q_custom_lpdf(y[i] | alpha, mu[i], u);
+}
+generated quantities {
+  matrix[2, 2] Rho;
+  vector[n] log_lik;
+  vector[n] y_sim;
+
+  // Compute correlation matrix
+  Rho = multiply_lower_tri_self_transpose(L_b);
+
+  // Compute log-likelihood for observed data
+  for (i in 1:n)
+    log_lik[i] = Q_custom_lpdf(y[i] | alpha, mu[i], 0.5);
+
+  // Simulate new data using custom RNG
+  for (i in 1:n)
+    y_sim[i] = Q_custom_rng(alpha, mu[i], 0.5);
+}"
+
+Prior4<-"functions {
+  // Custom log-PDF for your QULL distribution
+  real Q_custom_lpdf(real y, real alpha, real mu, real u) {
+    real term1;
+    real term2;
+    real term3;
+    real term4;
+    real term5;
+    real term6;
+    real term7;
+    real exponent;
+
+    // compute common exponent
+    exponent = pow(-log(y), alpha) * pow(-log(mu), -alpha);
+
+    // log(alpha / y)
+    term1 = log(alpha);
+    term2 = -log(y);
+
+    // (-log y)^(alpha - 1)
+    term3 = (alpha - 1) * log(-log(y));
+
+    // (-log mu)^(-alpha)
+    term4 = -alpha * log(-log(mu));
+
+    // log(log(1 - log u))
+    term5 = log(log(1 - log(u)));
+
+    // [(1 - log u)^( -log mu^-alpha )]^( -log y^alpha )
+    term6 = exponent * log(1 - log(u));
+
+    // exp{1 - [...] } -> log(exp{1 - [...]}) = 1 - [...]
+    term7 = 1 - pow(1 - log(u), exponent);
+
+    return term1 + term2 + term3 + term4 + term5 + term6 + term7;
+  }
+  real Q_custom_rng(real alpha, real mu, real u) {
+    real p;
+    real B;
+    real denom_log;
+    real numer_log;
+    real y;
+
+    // Sample p ~ Uniform(0,1)
+    p = uniform_rng(0, 1);
+
+    // Compute intermediate values
+    B = -log(mu);
+    denom_log = log(1 - log(u));
+    numer_log = log(1 - log(p));
+
+    // Compute the quantile
+    y = exp( - B * pow(numer_log / denom_log, 1 / alpha) );
+    return y;
+  }
+}
+
+data {
+  int<lower=0> n;                 // number of observations
+  int<lower=0> M;                 // number of groups
+  real<lower=0, upper=1> y[n];    // response
+  int<lower=1> K;                 // number of predictors
+  matrix[n, K] X;                 // design matrix
+  int<lower=1, upper=M> id[n];    // group ID
+  vector[K] b0;                    // prior mean for beta
+  matrix[K, K] B0;                 // prior covariance for beta
+  real<lower=0, upper=1> u;       // fixed u
+}
+
+parameters {
+  vector[K] beta;                 
+  vector<lower=0>[2] sigma_b;     
+  matrix[2, M] z_b;               
+  cholesky_factor_corr[2] L_b;    
+  real<lower=0> alpha;            
+}
+
+transformed parameters {
+  vector<lower=0, upper=1>[n] mu;
+  vector[n] eta_mu;
+  matrix[2, M] b;
+  
+  b = diag_pre_multiply(sigma_b, L_b) * z_b;
+  eta_mu = X * beta;
+  
+  for (i in 1:n)
+    mu[i] = inv_logit(eta_mu[i] + b[1, id[i]] + b[2, id[i]] * X[i, 2]);
+}
+
+model {
+  // Priors
+  L_b ~ lkj_corr_cholesky(1.0);
+  to_vector(z_b) ~ normal(0, 1);
+  beta ~ multi_normal(b0, B0);
+  sigma_b ~ normal(0,1);
+  alpha ~ exponential(1);
+  
+  // Likelihood
+  for (i in 1:n)
+    target += Q_custom_lpdf(y[i] | alpha, mu[i], u);
+}
+generated quantities {
+  matrix[2, 2] Rho;
+  vector[n] log_lik;
+  vector[n] y_sim;
+
+  // Compute correlation matrix
+  Rho = multiply_lower_tri_self_transpose(L_b);
+
+  // Compute log-likelihood for observed data
+  for (i in 1:n)
+    log_lik[i] = Q_custom_lpdf(y[i] | alpha, mu[i], u);
+
+  // Simulate new data using custom RNG
+  for (i in 1:n)
+    y_sim[i] = Q_custom_rng(alpha, mu[i], 0.5);
+}"
+
+Prior5<-"functions {
+  // Custom log-PDF for your QULL distribution
+  real Q_custom_lpdf(real y, real alpha, real mu, real u) {
+    real term1;
+    real term2;
+    real term3;
+    real term4;
+    real term5;
+    real term6;
+    real term7;
+    real exponent;
+
+    // compute common exponent
+    exponent = pow(-log(y), alpha) * pow(-log(mu), -alpha);
+
+    // log(alpha / y)
+    term1 = log(alpha);
+    term2 = -log(y);
+
+    // (-log y)^(alpha - 1)
+    term3 = (alpha - 1) * log(-log(y));
+
+    // (-log mu)^(-alpha)
+    term4 = -alpha * log(-log(mu));
+
+    // log(log(1 - log u))
+    term5 = log(log(1 - log(u)));
+
+    // [(1 - log u)^( -log mu^-alpha )]^( -log y^alpha )
+    term6 = exponent * log(1 - log(u));
+
+    // exp{1 - [...] } -> log(exp{1 - [...]}) = 1 - [...]
+    term7 = 1 - pow(1 - log(u), exponent);
+
+    return term1 + term2 + term3 + term4 + term5 + term6 + term7;
+  }
+  real Q_custom_rng(real alpha, real mu, real u) {
+    real p;
+    real B;
+    real denom_log;
+    real numer_log;
+    real y;
+
+    // Sample p ~ Uniform(0,1)
+    p = uniform_rng(0, 1);
+
+    // Compute intermediate values
+    B = -log(mu);
+    denom_log = log(1 - log(u));
+    numer_log = log(1 - log(p));
+
+    // Compute the quantile
+    y = exp( - B * pow(numer_log / denom_log, 1 / alpha) );
+    return y;
+  }
+}
+
+data {
+  int<lower=0> n;                 // number of observations
+  int<lower=0> M;                 // number of groups
+  real<lower=0, upper=1> y[n];    // response
+  int<lower=1> K;                 // number of predictors
+  matrix[n, K] X;                 // design matrix
+  int<lower=1, upper=M> id[n];    // group ID
+  vector[K] b0;                    // prior mean for beta
+  matrix[K, K] B0;                 // prior covariance for beta
+  real<lower=0, upper=1> u;       // fixed u
+}
+
+parameters {
+  vector[K] beta;                 
+  vector<lower=0>[2] sigma_b;     
+  matrix[2, M] z_b;               
+  cholesky_factor_corr[2] L_b;    
+  real<lower=0> alpha;            
+}
+
+transformed parameters {
+  vector<lower=0, upper=1>[n] mu;
+  vector[n] eta_mu;
+  matrix[2, M] b;
+  
+  b = diag_pre_multiply(sigma_b, L_b) * z_b;
+  eta_mu = X * beta;
+  
+  for (i in 1:n)
+    mu[i] = inv_logit(eta_mu[i] + b[1, id[i]] + b[2, id[i]] * X[i, 2]);
+}
+
+model {
+  // Priors
+  L_b ~ lkj_corr_cholesky(1);
+  to_vector(z_b) ~ normal(0, 1);
+  beta ~ multi_normal(b0, B0);
+  sigma_b ~ normal(0,2);
+  alpha ~ exponential(0.5);
+  
+  // Likelihood
+  for (i in 1:n)
+    target += Q_custom_lpdf(y[i] | alpha, mu[i], u);
+}
+generated quantities {
+  matrix[2, 2] Rho;
+  vector[n] log_lik;
+  vector[n] y_sim;
+
+  // Compute correlation matrix
+  Rho = multiply_lower_tri_self_transpose(L_b);
+
+  // Compute log-likelihood for observed data
+  for (i in 1:n)
+    log_lik[i] = Q_custom_lpdf(y[i] | alpha, mu[i], u);
+
+  // Simulate new data using custom RNG
+  for (i in 1:n)
+    y_sim[i] = Q_custom_rng(alpha, mu[i], 0.5);
+}"
+
+
+###Application####
+##Load following packages before proceed####
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(rstan)
+library(tidyr)
+library(WDI)
+library(janitor)
+###########Co2 data#####
+
+getwd()
+
+# Read CSV (replace with your actual file path)
+data <- read_csv("GHG_data.csv", show_col_types = FALSE)
+
+# Define South Asian countries
+south_asia <- c("World",
+                "India", "Pakistan", "Bangladesh", "Nepal", "Sri Lanka", 
+                "Maldives", "Afghanistan")
+
+
+
+# Filter South Asian countries
+sa_data <- data %>%
+  filter(Country %in% south_asia)
+
+# Identify year columns automatically (starts with 19xx or 20xx)
+year_cols <- names(sa_data)[grepl("^19|^20", names(sa_data))]
+
+# Convert all year columns to numeric (safe for character or double)
+sa_data <- sa_data %>%
+  mutate(across(all_of(year_cols), as.numeric))
+
+# Reshape to long format
+sa_long <- sa_data %>%
+  mutate(across(all_of(year_cols), as.numeric)) %>%   # ensure numeric
+  pivot_longer(
+    cols = all_of(year_cols),
+    names_to = "Year",
+    values_to = "Value"
+  ) %>%
+  mutate(
+    Year = as.integer(Year),
+    Year_c = Year - 2000     # center year at 1990
+  ) %>%
+  filter(Year >= 2000 & Year <= 2022) %>%  # keep only 2000-2022
+  dplyr::select(ISO, Country, Sector, Gas, Unit, Year, Year_c, Value)
+
+
+
+# make sure Year is numeric
+sa_long <- sa_long %>%
+  mutate(Year = as.numeric(Year))
+
+# Plot emissions over time
+
+asia_data <- sa_long %>%
+  dplyr::filter(Country %in% south_asia)
+
+# Separate World and country values
+world_data <- asia_data %>%
+  dplyr::filter(Country == "World") %>%
+  dplyr::select(Year, World_Value = Value)
+
+country_data <- asia_data %>%
+  dplyr::filter(Country != "World")
+
+# Join World values to country data by Year
+ratio_data <- country_data %>%
+  dplyr::left_join(world_data, by = "Year") %>%
+  dplyr::mutate(Ratio = Value / World_Value) %>%
+  dplyr::select(Country, Year, Value, World_Value, Ratio)
+
+####WDI data##
+south_asian_countries <- c("AFG", "BGD", "IND", "MDV", "NPL", "PAK", "LKA")
+
+indicators <- c(
+  "NY.GDP.MKTP.CD",    # GDP(current US$) ##not per capita
+  "SP.URB.GROW",       # Urban population growth (% annual)
+  "EG.FEC.RNEW.ZS",    # Renewable energy consumption (% of total final energy consumption)
+  "SP.POP.TOTL"      # Total Population
+)
+
+# Download data###
+south_asia_data <- WDI(
+  country = south_asian_countries,
+  indicator = indicators,
+  start = 2000,
+  end   = 2022,
+  extra = TRUE
+)
+
+###Merge three data sets::###
+
+ratio_data<-ratio_data %>% rename(country=Country,year=Year)
+
+combined_data <- ratio_data %>%
+  full_join(south_asia_data, by = c("country", "year"))
+
+combined_data <- combined_data %>%
+  arrange(country, year)
+
+
+combined_data <- combined_data %>%
+  rename(
+    GDP = NY.GDP.MKTP.CD,       # GDP (current US$)
+    Urban_pop_growth = SP.URB.GROW,        # Urban population growth (% annual)
+    Renewable_share = EG.FEC.RNEW.ZS,      # Renewable energy consumption (% of total final energy)
+    Population= SP.POP.TOTL        ###Population
+  )
+glimpse(combined_data)
+model_data_final <- combined_data %>%
+  drop_na(year, GDP,Urban_pop_growth, Renewable_share, Ratio, Population)
+
+model_data_final$GDP_log<-log(model_data$GDP)
+model_data_final$Population_mil=model_data$Population/10000000
+model_data_final$year_c<-model_data$year-2000
+#write.csv(model_data_final,"UpdatedPubFinalGHGdata.csv")
+
+#########################################
+###Data Preparation fo STAN Qunatile 50###
+#########################################
+X<-model.matrix(~ year_c+Population_mil+GDP_log+Urban_pop_growth+Renewable_share,data=model_data_final)
+K= ncol(X)
+dim(X)
+ID <- as.numeric(factor(model_data_final$country))
+data.unit.mixed<-list(n=length(model_data_final$Ratio),u=0.5,K= ncol(X), M=max(ID), y=model_data_final$Ratio, X=X, year_c=model_data_final$year_c,id=ID,b0=rep(0,K),B0=diag(100,K))
+
+####Initial Values###
+inits_opt <- function(chain_id = 1) {
+  set.seed(123 + chain_id)   # ensures different chains get different seeds
+  
+  K <- ncol(data.unit.mixed$X)
+  M <- max(data.unit.mixed$id)
+  
+  list(
+    beta    = rnorm(K, 0, 0.001),        # small random around 0
+    sigma_b = runif(2, 0.05, 0.15),      # small positive values
+    z_b     = matrix(rnorm(2 * M, 0, 0.001), nrow = 2, ncol = M),  # near 0
+    L_b     = diag(2),                    # identity correlation
+    alpha   = runif(1, 0.5, 2)          # positive, safe range
+  )
+}
+
+
+fit1<- stan(model_code = Prior1, data = data.unit.mixed, 
+               iter = 8000, chains = 4,cores=4,seed=1234,init=inits_opt,control = list(adapt_delta = 0.97, max_treedepth = 15))
+
+
+fit2<- stan(model_code = Prior2, data = data.unit.mixed, 
+              iter = 8000, chains = 4,cores=4,seed=1234,init=inits_opt,control = list(adapt_delta = 0.97, max_treedepth = 15))
+
+fit3<- stan(model_code = Prior3, data = data.unit.mixed, 
+              iter = 8000, chains = 4,cores=4,seed=1234,init=inits_opt,control = list(adapt_delta = 0.97, max_treedepth = 15))
+
+fit4<- stan(model_code = Prior4, data = data.unit.mixed, 
+              iter = 8000, chains = 4,cores=4,seed=1234,init=inits_opt,control = list(adapt_delta = 0.97, max_treedepth = 15))
+
+fit55<- stan(model_code = Prior5, data = data.unit.mixed, 
+              iter = 8000, chains = 4,cores=4,seed=1234,init=inits_opt,control = list(adapt_delta = 0.97, max_treedepth = 15))
+
+#####Extracting Posterior Estimates####
+library(rstan)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+
+# Function to extract posterior samples of fixed effect##
+extract_post_fixed <- function(fit, prior_name){
+  ex <- rstan::extract(fit)
+  data.frame(
+    beta1 = ex$beta[,1],
+    beta2 = ex$beta[,2],
+    beta3 = ex$beta[,3],
+    beta4 = ex$beta[,4],
+    beta5 = ex$beta[,5],
+    beta6 = ex$beta[,6],
+    Prior = prior_name
+  )
+}
+
+###Function to extract random effect and shape parameters###
+extract_post_random <- function(fit, prior_name){
+  ex <- rstan::extract(fit)
+  data.frame(
+    sigma_b1 = ex$sigma_b[,1],
+    sigma_b2 = ex$sigma_b[,2],
+    rho12 = ex$Rho[,1,2],
+    alpha = ex$alpha,
+    Prior = prior_name
+  )
+}
+
+# Extract from all five priors for fixed effect###
+df1 <- extract_post_fixed(fit1, "Prior 1")
+df2 <- extract_post_fixed(fit2, "Prior 2")
+df3 <- extract_post_fixed(fit3, "Prior 3")
+df4 <- extract_post_fixed(fit4, "Prior 4")
+df5 <- extract_post_fixed(fit55, "Prior 5")
+
+# Combine all fixed effects draws###
+all_df_fixed <- bind_rows(df1,df2,df3,df4, df5)
+
+# Convert to long format
+plot_df_fixed <- all_df_fixed %>%
+  pivot_longer(
+    cols = -Prior,
+    names_to = "Parameter",
+    values_to = "Value"
+  )
+
+# Convert parameter names to math expressions##
+plot_df_fixed$Parameter <- recode(
+  plot_df_fixed$Parameter,
+  beta1 = "beta[1]",
+  beta2 = "beta[2]",
+  beta3 = "beta[3]",
+  beta4 = "beta[4]",
+  beta5 = "beta[5]",
+  beta6 = "beta[6]"
+)
+
+# Posterior comparison boxplots for fixed effects##
+ggplot(plot_df_fixed, aes(x = Prior, y = Value)) +
+  geom_boxplot() +
+  facet_wrap(
+    ~Parameter,
+    scales = "free",
+    labeller = label_parsed
+  ) +
+  theme_bw() +
+  labs(
+    title = "",
+    x = "Prior Specification",
+    y = "Posterior Estimates"
+  )
+
+
+# Extract from all five priors for random effects and shape parameter##
+df12 <- extract_post_random(fit1, "Prior 1")
+df22 <- extract_post_random(fit2, "Prior 2")
+df32 <- extract_post_random(fit3, "Prior 3")
+df42 <- extract_post_random(fit4, "Prior 4")
+df52 <- extract_post_random(fit55, "Prior 5")
+
+# Combine all
+all_df_random <- bind_rows(df12,df22,df32,df42, df52)
+
+# Convert to long format
+plot_df_random <- all_df_random %>%
+  pivot_longer(
+    cols = -Prior,
+    names_to = "Parameter",
+    values_to = "Value"
+  )
+
+# Convert parameter names to math expressions##
+plot_df_random$Parameter <- recode(
+  plot_df_random$Parameter,
+  sigma_b1 = "sigma[b[1]]",
+  sigma_b2 = "sigma[b[2]]",
+  rho12    = "rho[12]",
+  alpha    = "alpha"
+)
+
+# Posterior comparison boxplots for random effect and shaoe parameter##
+ggplot(plot_df_random, aes(x = Prior, y = Value)) +
+  geom_boxplot() +
+  facet_wrap(
+    ~Parameter,
+    scales = "free",
+    labeller = label_parsed
+  ) +
+  theme_bw() +
+  labs(
+    title = "",
+    x = "Prior Specification",
+    y = "Posterior Estimates"
+  )
