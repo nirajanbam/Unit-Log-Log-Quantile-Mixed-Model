@@ -1,173 +1,5 @@
 rm(list = ls())
 
-#####################
-functions {
-  real Q_custom_lpdf(real y, real alpha, real mu, real u) {
-    // Preconditions: y, mu, u in (0,1), alpha > 0
-    real ly = -log(y);
-    real lmu = -log(mu);
-    real log_base = log1p(-log(u));  // safer version of log(1 - log(u))
-    
-    real E = pow(ly, alpha) * pow(lmu, -alpha);
-    
-    real lpdf =
-      log(alpha)
-      - log(y)
-      + (alpha - 1) * log(ly)
-      - alpha * log(lmu)
-      + log(log_base)
-      + E * log(1 - log(u))
-      + 1 - pow((1 - log(u)), E);
-    
-    return lpdf;
-###########################
-
-Trycode<-"functions {
-  // Numerically stable log-PDF for QULL distribution
-  real Q_custom_lpdf(real y, real alpha, real mu, real u) {
-    // Preconditions
-    real ly = -log(y);
-    real lmu = -log(mu);
-    real logu = log(u);
-
-    // Base term: log(1 - log(u))
-    real log_base = log1p(-log(u));  // safer than log(1 - log(u))
-
-    // Exponent term (capped to avoid overflow)
-    real E = pow(ly, alpha) * pow(lmu, -alpha);
-    E = fmin(E, 1e6);  // cap for numerical safety
-
-    // Term 1: log(alpha / y)
-    real t1 = log(alpha) - log(y);
-
-    // Term 2: (-log y)^(alpha-1)
-    real t2 = (alpha - 1) * log(ly);
-
-    // Term 3: (-log mu)^(-alpha)
-    real t3 = -alpha * log(lmu);
-
-    // Term 4: log(log_base)
-    real t4 = log(log_base);
-
-    // Term 5: E * log_base (power/fraction form)
-    real t5 = E * log_base;
-
-    // Term 6: 1 - [(1 - log u)^E] -> use log1p(-x) for stability
-    real t6 = 1 - exp(E * log1p(-log(u)));  // safer version
-
-    // Sum all terms
-    real lpdf = t1 + t2 + t3 + t4 + t5 + t6;
-
-    return lpdf;
-  }
-  // Custom RNG using quantile function
-  real Q_custom_rng(real alpha, real mu, real u) {
-    real p;
-    real B;
-    real denom_log;
-    real numer_log;
-    real y;
-    
-    // Sample p ~ Uniform(0,1)
-    p = uniform_rng(0, 1);
-    
-    // Compute intermediate values
-    B = -log(mu);
-    denom_log = log(1 - log(u));
-    numer_log = log(1 - log(p));
-    
-    // Compute the quantile
-    y = exp( - B * pow(numer_log / denom_log, 1 / alpha) );
-    return y;
-  }
-}
-
-data {
-  int<lower=0> n;                 // number of observations
-  int<lower=0> M;                 // number of groups
-  real<lower=0, upper=1> y[n];    // response
-  int<lower=1> K;                 // number of predictors
-  matrix[n, K] X;                 // design matrix
-  int<lower=1, upper=M> id[n];    // group ID
-  vector[K] b0;                    // prior mean for beta
-  matrix[K, K] B0;                 // prior covariance for beta
-    real<lower=0, upper=1> u;       // fixed u
-}
-
-parameters {
-  vector[K] beta;                 
-  vector<lower=0>[2] sigma_b;     
-  matrix[2, M] z_b;               
-  cholesky_factor_corr[2] L_b;    
-  real<lower=0> alpha;            
-}
-
-transformed parameters {
-  vector<lower=0, upper=1>[n] mu;
-  vector[n] eta_mu;
-  matrix[2, M] b;
-  
-  b = diag_pre_multiply(sigma_b, L_b) * z_b;
-  eta_mu = X * beta;
-  
-  for (i in 1:n)
-    mu[i] = inv_logit(eta_mu[i] + b[1, id[i]] + b[2, id[i]] * X[i, 2]);
-}
-
-model {
-  // Priors
-  L_b ~ lkj_corr_cholesky(1.0);
-  to_vector(z_b) ~ normal(0, 1);
-  beta ~ multi_normal(b0, B0);
-  sigma_b ~ normal(0,1);
-  alpha ~ gamma(0.5,1);
-  
-  // Likelihood
-for (i in 1:n) {
-  real ly = -log(y[i]);
-  real lmu = -log(mu[i]);
-  real log_base = log1p(-log(0.5)); // safer than log(1-log(u))
-  real E = pow(ly, alpha) * pow(lmu, -alpha);
-
-  target += log(alpha)
-            - log(y[i])
-            + (alpha - 1) * log(ly)
-            - alpha * log(lmu)
-            + log(log_base)
-            + E * log(1 - log(0.5))
-            + 1 - pow((1 - log(0.5)), E);
-}
-}
-
-generated quantities {
-  matrix[2, 2] Rho;
-  vector[n] log_lik;
-  vector[n] y_sim;
-
-  // Compute correlation matrix
-  Rho = multiply_lower_tri_self_transpose(L_b);
-
-  // Compute log-likelihood for observed data
-  for (i in 1:n) {
-    real ly = -log(y[i]);
-    real lmu = -log(mu[i]);
-    real log_base = log1p(-log(0.5));  // safer log(1 - log(u))
-    real E = pow(ly, alpha) * pow(lmu, -alpha);
-
-    log_lik[i] = log(alpha)
-                 - log(y[i])
-                 + (alpha - 1) * log(ly)
-                 - alpha * log(lmu)
-                 + log(log_base)
-                 + E * log(1 - log(0.5))
-                 + 1 - pow((1 - log(0.5)), E);
-  }
-
-  // Simulate new data using custom RNG
-  for (i in 1:n)
-    y_sim[i] = Q_custom_rng(alpha, mu[i], 0.5);
-}"
-
 Prior1<-"functions {
   // Custom log-PDF for your QULL distribution
   real Q_custom_lpdf(real y, real alpha, real mu, real u) {
@@ -830,16 +662,6 @@ simulate_data <- function(n, M, beta_true, Sigma_b_true, alpha_true, u) {
   list(X = X, y = y, id = id, mu = mu)
 }
 
-# ---------------------------
-# Compile models (example placeholders)
-# ---------------------------
-writeLines(Prior1, "Prior1.stan")
-writeLines(Prior2, "Prior2.stan")
-writeLines(Prior3, "Prior3.stan")
-writeLines(Prior4, "Prior4.stan")
-writeLines(Prior5, "Prior5.stan")
-
-
 # Compile Stan models
 Model1_compiled <- stan_model("Prior1.stan")
 Model2_compiled <- stan_model("Prior2.stan")
@@ -847,7 +669,7 @@ Model3_compiled <- stan_model("Prior3.stan")
 Model4_compiled <- stan_model("Prior4.stan")
 Model5_compiled <- stan_model("Prior5.stan")
 
-# Now create the list of models
+### List of models##
 models <- list(Model1_compiled, Model2_compiled,Model3_compiled,Model4_compiled,Model5_compiled)
 
 # ---------------------------
@@ -858,8 +680,9 @@ LOOIC_mat <- matrix(NA, nrow = Nsim, ncol = length(models))
 WAIC_mat  <- matrix(NA, nrow = Nsim, ncol = length(models))
 best_model_LOOIC <- numeric(Nsim)
 best_model_WAIC  <- numeric(Nsim)
-
-
+##############
+###Simulation##
+###############
 for (sim in 1:Nsim) {
   cat("Simulation", sim, "of", Nsim, "\n")
   
@@ -894,7 +717,7 @@ for (sim in 1:Nsim) {
           chains = 2,
           iter = 4000,
           init = inits1,
-          control = list(adapt_delta = 0.9999, max_treedepth = 22),
+          control = list(adapt_delta = 0.999, max_treedepth = 17),
           refresh = 0
         ),
         warning = function(w) {
@@ -959,11 +782,8 @@ best_model_summary <- data.frame(
   LOOIC_selected = as.integer(loo_best_counts),
   WAIC_selected  = as.integer(waic_best_counts)
 )
-
 print(best_model_summary)
-
-
-# Summarize model selection
+# Summarize model selection##
 table(LOOIC = best_model_LOOIC, WAIC = best_model_WAIC)
 prop.table(table(best_model_LOOIC))  # % of times model 1 or 2 selected by LOOIC
 prop.table(table(best_model_WAIC))   # % of times model 1 or 2 selected by WAIC
@@ -987,12 +807,9 @@ col_means <- apply(LOOIC_mat, 2, function(x) summary(x, na.rm = TRUE))
 col_means
 col_means <- apply(WAIC_mat, 2, function(x) summary(x, na.rm = TRUE))
 col_means
-# Name columns for clarity
-colnames(result) <- c("MinValue", "Column")
-result
 
-na_count <- apply(LOOIC_mat, 2, function(x) sum(is.na(x)))
-na_count
+
+
 
 
 
