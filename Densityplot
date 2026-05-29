@@ -125,3 +125,50 @@ legend("top",
        bty = "box",
        cex = 0.85)
 
+
+###CDF Function###
+F <- function(y, alpha, mu, u) {
+  term1 <- (1 - log(u))^((-log(mu))^(-alpha))
+  term2 <- term1^((-log(y))^alpha)
+  exp(1 - term2)
+}
+##CDF plots###
+y_vals <- seq(0.001, 0.999, length.out = 400)
+
+alpha_vals <- c(0.25, 0.5, 1, 2)
+mu_vals3   <- c(0.15, 0.25, 0.5, 0.90)
+
+u <- 0.50
+
+cols <- c("red", "blue", "darkgreen", "purple")
+
+for (alpha in alpha_vals) {
+  
+  plot(y_vals,
+       F(y_vals, alpha, mu_vals3[1], u),
+       type = "l",
+       lwd = 2,
+       col = cols[1],
+       ylim = c(0, 1),
+       xlab = "y",
+       ylab = expression(F(y)),
+       main = bquote(alpha == .(alpha) ~ "," ~ u == 0.5))
+  
+  for (j in 2:length(mu_vals3)) {
+    lines(y_vals,
+          F(y_vals, alpha, mu_vals3[j], u),
+          col = cols[j],
+          lwd = 2)
+  }
+  
+  legend("topleft",
+         legend = sapply(mu_vals3, function(m)
+           bquote(mu == .(m))
+         ),
+         col = cols,
+         lwd = 2,
+         bty = "n")
+  
+  readline("Press ENTER for next plot...")
+}
+
